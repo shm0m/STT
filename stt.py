@@ -121,6 +121,7 @@ def _ask_and_print(prompt):
     print(f"{C_GREEN}[MIRA] {response}{C_RESET}")
     if mqtt_client:
         mqtt_client.publish("mira/stt/reponse", response)
+        mqtt_client.publish("mira/tts/say", response)
 
 def main():
     global mqtt_client
