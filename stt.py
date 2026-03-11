@@ -103,13 +103,22 @@ def process_text(text):
 
 def _ask_and_print(prompt):
     global derniere_vision, last_vision_time
-    ctx = derniere_vision if (time.time() - last_vision_time <= 15) else "Rien à signaler"
-    full_prompt = f"[VUE]: {ctx}\n[AUDIO]: {prompt}\nRéponds brièvement."
+    
+    if time.time() - last_vision_time <= 20:
+        vision_contexte = f"En ce moment, tu vois : {derniere_vision}."
+    else:
+        vision_contexte = "Tu ne vois rien de particulier ou la caméra est obstruée."
+
+    full_prompt = (
+        f"CONTEXTE VISUEL : {vision_contexte}\n"
+        f"COMMANDE VOCALE : {prompt}\n\n"
+        f"CONSIGNE : En tant que robot M.I.R.A, réponds à la commande vocale "
+        f"en utilisant les informations du contexte visuel si nécessaire. "
+        f"Sois bref et direct."
+    )
     
     response = ask_ollama(full_prompt)
-    
     print(f"{C_GREEN}[MIRA] {response}{C_RESET}")
-    
     if mqtt_client:
         mqtt_client.publish("mira/stt/reponse", response)
 
