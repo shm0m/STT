@@ -11,15 +11,15 @@ import sounddevice as sd
 import paho.mqtt.client as mqtt
 from vosk import Model, KaldiRecognizer
 
-# ── Configuration ──────────────────────────────────────────────
+
 VOSK_RATE = 16000
 WAKE_WORD = "mira"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://mira-ollama:11434/api/generate")
 MODEL_NAME = os.getenv("OLLAMA_MODEL", "mira")
 MODEL_PATH = os.getenv("VOSK_MODEL", "/app/model")
-NOISE_THRESHOLD = int(os.getenv("NOISE_THRESHOLD", "800"))  # Seuil RMS, ajustable
+NOISE_THRESHOLD = int(os.getenv("NOISE_THRESHOLD", "800"))
 
-# Variables MQTT
+
 derniere_vision = "Rien à signaler"
 last_vision_time = 0.0
 mqtt_client = None
@@ -34,7 +34,7 @@ MOTOR_COMMANDS = {
     "position",
 }
 
-# ── Couleurs terminal ─────────────────────────────────────────
+
 C_RESET  = "\033[0m"
 C_GREEN  = "\033[1;32m"
 C_CYAN   = "\033[0;36m"
@@ -42,7 +42,6 @@ C_YELLOW = "\033[1;33m"
 C_RED    = "\033[1;31m"
 C_BLUE   = "\033[1;34m"
 
-# ── Callbacks MQTT ────────────────────────────────────────────
 def on_mqtt_connect(client, userdata, flags, rc):
     print(f"{C_CYAN}[MQTT] Connecté avec le code {rc}. Abonnement à mira/vision/output...{C_RESET}")
     client.subscribe("mira/vision/output")
@@ -52,7 +51,7 @@ def on_mqtt_message(client, userdata, msg):
     derniere_vision = msg.payload.decode("utf-8")
     last_vision_time = time.time()
 
-# ── Queue audio ───────────────────────────────────────────────
+
 audio_queue = queue.Queue()
 
 def audio_callback(indata, frames, time_info, status):
@@ -76,17 +75,11 @@ def noise_gate(data, threshold):
     return data, rms, False
 
 def downsample(data, from_rate, to_rate):
-    """Downsampling simple (prend 1 échantillon sur N) de int16 PCM."""
     if from_rate == to_rate:
         return data
-    ratio = from_rate / to_rate
-    samples = struct.unpack(f"<{len(data)//2}h", data)
-    new_samples = []
-    pos = 0.0
-    while int(pos) < len(samples):
-        new_samples.append(samples[int(pos)])
-        pos += ratio
-    return struct.pack(f"<{len(new_samples)}h", *new_samples)
+    samples = np.frombuffer(data, dtype=np.int16)
+    ratio = from_rate // to_rate
+    return samples[::ratio].tobytes()
 
 def detect_motor_command(text):
     """Vérifie si le texte contient un ordre moteur connu."""
@@ -117,11 +110,9 @@ def process_text(text):
     """Traite le texte reconnu après détection du wake word."""
     text_lower = text.lower().strip()
 
-    # Cherche "mira" dans le texte
     if WAKE_WORD not in text_lower:
-        return  # Pas de wake word, on ignore
+        return
 
-    # Extrait ce qui suit "mira"
     idx = text_lower.index(WAKE_WORD) + len(WAKE_WORD)
     after_wake = text_lower[idx:].strip()
 
@@ -131,7 +122,6 @@ def process_text(text):
 
     print(f"{C_GREEN}[WAKE] Commande détectée : \"{after_wake}\"{C_RESET}")
 
-    # Vérifie si c'est un ordre moteur
     motor_cmd = detect_motor_command(after_wake)
     if motor_cmd:
         print(f"{C_RED}[ORDRE DÉTECTÉ] {motor_cmd.upper()}{C_RESET}")
@@ -141,8 +131,6 @@ def process_text(text):
             print(f"{C_CYAN}[MQTT] Ordre publié : {payload}{C_RESET}")
         return
 
-    # Sinon, c'est une question → envoyer au LLM dans un thread séparé
-    # pour ne pas bloquer l'écoute micro
     print(f"{C_BLUE}[QUESTION] \"{after_wake}\"{C_RESET}")
     threading.Thread(target=_ask_and_print, args=(after_wake,), daemon=True).start()
 
@@ -188,10 +176,8 @@ def find_working_rate(device_id):
 
 def main():
     global mqtt_client
-    
-    # 0. Initialisation MQTT
+
     print(f"{C_CYAN}[INIT] Connexion au broker MQTT...{C_RESET}")
-    # Compatibilité paho-mqtt v1 et v2
     try:
         mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
     except AttributeError:
@@ -206,7 +192,6 @@ def main():
     except Exception as e:
         print(f"{C_RED}[ERREUR] Impossible de se connecter à mira-mosquitto : {e}{C_RESET}")
 
-    # 1. Charger le modèle Vosk
     print(f"{C_CYAN}[INIT] Chargement du modèle Vosk...{C_RESET}")
     if not os.path.exists(MODEL_PATH):
         print(f"{C_RED}[ERREUR] Modèle Vosk introuvable à {MODEL_PATH}{C_RESET}")
@@ -215,13 +200,10 @@ def main():
     model = Model(MODEL_PATH)
     recognizer = KaldiRecognizer(model, VOSK_RATE)
 
-    # 2. Trouver le micro
     print(f"{C_CYAN}[INIT] Recherche du micro...{C_RESET}")
     device_id = find_microphone()
     dev_info = sd.query_devices(device_id)
     print(f"{C_GREEN}[INIT] Micro sélectionné : {dev_info['name']}{C_RESET}")
-
-    # 3. Trouver un sample rate supporté
     device_rate = find_working_rate(device_id)
     if device_rate is None:
         print(f"{C_RED}[ERREUR] Aucun sample rate supporté trouvé pour ce micro.{C_RESET}")
@@ -231,12 +213,11 @@ def main():
     print(f"{C_CYAN}[INIT] Sample rate micro: {device_rate} Hz" +
           (f" (resample → {VOSK_RATE} Hz)" if needs_resample else "") + f"{C_RESET}")
 
-    # 4. Boucle d'écoute
     print(f"{C_GREEN}>>> PRÊT. J'écoute en continu (wake word: '{WAKE_WORD}')...{C_RESET}")
 
     with sd.RawInputStream(
         samplerate=device_rate,
-        blocksize=16000,
+        blocksize=32000,
         device=device_id,
         dtype="int16",
         channels=1,
@@ -246,7 +227,6 @@ def main():
             data = audio_queue.get()
             if needs_resample:
                 data = downsample(data, device_rate, VOSK_RATE)
-            # Noise gate : on envoie du silence si le son est trop faible
             data, rms, is_silent = noise_gate(data, NOISE_THRESHOLD)
             if recognizer.AcceptWaveform(data):
                 result = json.loads(recognizer.Result())
